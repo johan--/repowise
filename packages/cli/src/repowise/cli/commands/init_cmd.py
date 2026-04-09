@@ -451,6 +451,9 @@ def init_command(
         plans = build_generation_plan(
             result.parsed_files, result.graph_builder, gen_config, skip_tests, skip_infra
         )
+        # Test-run: only generate file pages for the limited file set
+        if test_run:
+            plans = [p for p in plans if p.page_type == "file_page"]
         est = estimate_cost(plans, provider.provider_name, provider.model_name)
 
         table = Table(title="Generation Plan", border_style=BRAND)

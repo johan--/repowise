@@ -80,6 +80,14 @@ _SKIP_DIRS = frozenset(
         "build",
         ".next",
         ".nuxt",
+        # Elixir/Erlang
+        "deps",
+        "_build",
+        # General
+        "tmp",
+        ".elixir_ls",
+        "vendor",
+        "target",
     }
 )
 
@@ -259,11 +267,11 @@ class DecisionExtractor:
     # Source 1: Inline markers
     # ------------------------------------------------------------------
 
-    async def scan_inline_markers(
+    def _scan_files_for_markers(
         self,
         restrict_to_files: list[str] | None = None,
-    ) -> list[ExtractedDecision]:
-        """Scan source files for decision markers (WHY:, DECISION:, etc.)."""
+    ) -> dict[str, list[dict]]:
+        """Sync helper: scan source files for decision markers. Runs in a thread."""
         markers_by_file: dict[str, list[dict]] = {}
 
         if restrict_to_files:
@@ -322,6 +330,17 @@ class DecisionExtractor:
                             "context": context,
                         }
                     )
+
+        return markers_by_file
+
+    async def scan_inline_markers(
+        self,
+        restrict_to_files: list[str] | None = None,
+    ) -> list[ExtractedDecision]:
+        """Scan source files for decision markers (WHY:, DECISION:, etc.)."""
+        markers_by_file = await asyncio.to_thread(
+            self._scan_files_for_markers, restrict_to_files
+        )
 
         if not markers_by_file:
             return []

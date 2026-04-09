@@ -573,6 +573,11 @@ class RichProgressCallback:
                 label, total=total, visible=True, cost=0.0
             )
 
+    def on_phase_complete(self, phase: str) -> None:
+        """Mark a phase as complete and hide its progress bar."""
+        if phase in self._tasks:
+            self._progress.update(self._tasks[phase], visible=False)
+
     def on_item_done(self, phase: str) -> None:
         if phase in self._tasks:
             self._progress.advance(self._tasks[phase])

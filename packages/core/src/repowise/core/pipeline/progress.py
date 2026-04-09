@@ -24,6 +24,10 @@ class ProgressCallback(Protocol):
         """Called when a pipeline phase begins. *total* may be None for indeterminate phases."""
         ...
 
+    def on_phase_complete(self, phase: str) -> None:
+        """Called when a pipeline phase finishes."""
+        ...
+
     def on_item_done(self, phase: str) -> None:
         """Called after one unit of work completes within a phase."""
         ...
@@ -38,6 +42,9 @@ class LoggingProgressCallback:
 
     def on_phase_start(self, phase: str, total: int | None) -> None:
         logger.info("phase_start", phase=phase, total=total)
+
+    def on_phase_complete(self, phase: str) -> None:
+        logger.info("phase_complete", phase=phase)
 
     def on_item_done(self, phase: str) -> None:
         logger.debug("item_done", phase=phase)

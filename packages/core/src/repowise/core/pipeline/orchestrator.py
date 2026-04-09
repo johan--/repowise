@@ -245,7 +245,7 @@ async def run_pipeline(
         )
 
     # Test-run: limit to top 10 files by PageRank
-    if test_run and generate_docs:
+    if test_run:
         try:
             import networkx as nx
 
@@ -261,21 +261,28 @@ async def run_pipeline(
             progress.on_message("warning", f"Test run: limiting to {len(parsed_files)} files")
 
     # ---- Phase 2: Analysis --------------------------------------------------
-    if progress:
-        progress.on_message("info", "Phase 2: Analysis")
+    dead_code_report = None
+    decision_report = None
 
-    dead_code_report = await _run_dead_code_analysis(
-        graph_builder, git_meta_map, progress=progress
-    )
+    if test_run:
+        if progress:
+            progress.on_message("info", "Phase 2: Analysis (skipped — test run)")
+    else:
+        if progress:
+            progress.on_message("info", "Phase 2: Analysis")
 
-    decision_report = await _run_decision_extraction(
-        repo_path,
-        llm_client=llm_client,
-        graph_builder=graph_builder,
-        git_meta_map=git_meta_map,
-        parsed_files=parsed_files,
-        progress=progress,
-    )
+        dead_code_report = await _run_dead_code_analysis(
+            graph_builder, git_meta_map, progress=progress
+        )
+
+        decision_report = await _run_decision_extraction(
+            repo_path,
+            llm_client=llm_client,
+            graph_builder=graph_builder,
+            git_meta_map=git_meta_map,
+            parsed_files=parsed_files,
+            progress=progress,
+        )
 
     # ---- Phase 3: Generation (optional) ------------------------------------
     generated_pages: list[Any] | None = None
@@ -567,7 +574,7 @@ async def _run_dead_code_analysis(
             progress.on_phase_start("dead_code", None)
 
         analyzer = DeadCodeAnalyzer(graph_builder.graph(), git_meta_map)
-        report = analyzer.analyze()
+        report = await asyncio.to_thread(analyzer.analyze)
 
         if progress:
             unreachable = sum(1 for f in report.findings if f.kind.value == "unreachable_file")
@@ -577,10 +584,12 @@ async def _run_dead_code_analysis(
                 f"Dead code: {unreachable} unreachable files "
                 f"· {unused_exports} unused exports (~{report.deletable_lines:,} lines)",
             )
+            progress.on_phase_complete("dead_code")
 
         return report
     except Exception as exc:
         if progress:
+            progress.on_phase_complete("dead_code")
             progress.on_message("warning", f"Dead code detection skipped: {exc}")
         return None
 
@@ -601,9 +610,15 @@ async def _run_decision_extraction(
         if progress:
             progress.on_phase_start("decisions", None)
 
+        # Skip LLM-based decision sources for local providers (too slow).
+        # Inline marker scan (regex only) still runs.
+        decision_llm = llm_client
+        if decision_llm and getattr(decision_llm, "provider_name", "") == "ollama":
+            decision_llm = None
+
         extractor = DecisionExtractor(
             repo_path=repo_path,
-            provider=llm_client,
+            provider=decision_llm,
             graph=graph_builder.graph(),
             git_meta_map=git_meta_map,
             parsed_files=parsed_files,
@@ -618,10 +633,12 @@ async def _run_decision_extraction(
                 "info",
                 f"Decisions: {inline} inline · {readme} from docs · {git_arch} from git",
             )
+            progress.on_phase_complete("decisions")
 
         return report
     except Exception as exc:
         if progress:
+            progress.on_phase_complete("decisions")
             progress.on_message("warning", f"Decision extraction skipped: {exc}")
         return None
 
