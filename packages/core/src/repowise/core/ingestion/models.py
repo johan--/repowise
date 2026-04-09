@@ -42,6 +42,7 @@ LanguageTag = Literal[
     "makefile",
     "markdown",
     "sql",
+    "elixir",
     "openapi",
     "unknown",
 ]
@@ -70,6 +71,8 @@ EXTENSION_TO_LANGUAGE: dict[str, LanguageTag] = {
     ".hpp": "cpp",
     ".cs": "csharp",
     ".rb": "ruby",
+    ".ex": "elixir",
+    ".exs": "elixir",
     ".php": "php",
     ".swift": "swift",
     ".kt": "kotlin",

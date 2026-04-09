@@ -565,6 +565,100 @@ class TestCppParser:
 
 
 # ---------------------------------------------------------------------------
+# Elixir
+# ---------------------------------------------------------------------------
+
+ELIXIR_SOURCE = b"""defmodule MyApp.Calculator do
+  @moduledoc "A simple calculator module."
+
+  use GenServer
+  import Enum, only: [map: 2]
+  alias MyApp.Repo
+  require Logger
+
+  defstruct [:value, :history]
+
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, opts)
+  end
+
+  defp do_calculate(x, y) do
+    x + y
+  end
+
+  def add(x, y) do
+    do_calculate(x, y)
+  end
+
+  defmacro define_operation(name) do
+    quote do
+      def unquote(name)(x, y), do: apply(Kernel, unquote(name), [x, y])
+    end
+  end
+end
+
+defmodule MyApp.Calculator.Protocol do
+  @moduledoc "Calculator protocol."
+end
+"""
+
+
+class TestElixirParser:
+    def test_finds_modules(self, parser: ASTParser) -> None:
+        fi = _make_file_info("lib/my_app/calculator.ex", "elixir")
+        result = parser.parse_file(fi, ELIXIR_SOURCE)
+        modules = [s for s in result.symbols if s.kind == "module"]
+        names = [m.name for m in modules]
+        assert "MyApp.Calculator" in names
+        assert "MyApp.Calculator.Protocol" in names
+
+    def test_finds_public_functions(self, parser: ASTParser) -> None:
+        fi = _make_file_info("lib/my_app/calculator.ex", "elixir")
+        result = parser.parse_file(fi, ELIXIR_SOURCE)
+        # Functions inside a module are promoted to "method" (like Python class methods)
+        fns = [s for s in result.symbols if s.kind == "method" and s.visibility == "public"]
+        fn_names = [f.name for f in fns]
+        assert "start_link" in fn_names
+        assert "add" in fn_names
+
+    def test_finds_private_functions(self, parser: ASTParser) -> None:
+        fi = _make_file_info("lib/my_app/calculator.ex", "elixir")
+        result = parser.parse_file(fi, ELIXIR_SOURCE)
+        private_fns = [
+            s for s in result.symbols if s.kind == "method" and s.visibility == "private"
+        ]
+        assert any(s.name == "do_calculate" for s in private_fns)
+
+    def test_finds_macros(self, parser: ASTParser) -> None:
+        fi = _make_file_info("lib/my_app/calculator.ex", "elixir")
+        result = parser.parse_file(fi, ELIXIR_SOURCE)
+        macros = [s for s in result.symbols if s.kind == "macro"]
+        assert any(m.name == "define_operation" for m in macros)
+
+    def test_method_has_parent_module(self, parser: ASTParser) -> None:
+        fi = _make_file_info("lib/my_app/calculator.ex", "elixir")
+        result = parser.parse_file(fi, ELIXIR_SOURCE)
+        add_fn = next(
+            s for s in result.symbols if s.name == "add" and s.kind in ("function", "method")
+        )
+        assert add_fn.parent_name == "MyApp.Calculator"
+
+    def test_parses_imports(self, parser: ASTParser) -> None:
+        fi = _make_file_info("lib/my_app/calculator.ex", "elixir")
+        result = parser.parse_file(fi, ELIXIR_SOURCE)
+        module_paths = [i.module_path for i in result.imports]
+        assert "GenServer" in module_paths
+        assert "Enum" in module_paths
+        assert "MyApp.Repo" in module_paths
+        assert "Logger" in module_paths
+
+    def test_no_parse_errors(self, parser: ASTParser) -> None:
+        fi = _make_file_info("lib/my_app/calculator.ex", "elixir")
+        result = parser.parse_file(fi, ELIXIR_SOURCE)
+        assert result.parse_errors == []
+
+
+# ---------------------------------------------------------------------------
 # Unsupported language (graceful fallback)
 # ---------------------------------------------------------------------------
 
@@ -588,7 +682,17 @@ class TestUnsupportedLanguage:
 
 class TestLanguageConfigs:
     def test_all_supported_languages_have_config(self) -> None:
-        expected = {"python", "typescript", "javascript", "go", "rust", "java", "cpp", "c"}
+        expected = {
+            "python",
+            "typescript",
+            "javascript",
+            "go",
+            "rust",
+            "java",
+            "cpp",
+            "c",
+            "elixir",
+        }
         for lang in expected:
             assert lang in LANGUAGE_CONFIGS, f"Missing config for {lang}"
 

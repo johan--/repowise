@@ -89,6 +89,7 @@ def _build_language_registry() -> dict[str, Language]:
     _try_load("go", lambda: Language(__import__("tree_sitter_go").language()))
     _try_load("rust", lambda: Language(__import__("tree_sitter_rust").language()))
     _try_load("java", lambda: Language(__import__("tree_sitter_java").language()))
+    _try_load("elixir", lambda: Language(__import__("tree_sitter_elixir").language()))
 
     def _cpp() -> None:
         import tree_sitter_cpp as ts_cpp
@@ -153,6 +154,14 @@ class LanguageConfig:
     # Entry-point filename patterns for this language
     entry_point_patterns: list[str] = field(default_factory=list)
 
+    # Optional: refine symbol kind based on node content (for languages where
+    # multiple constructs share the same node type, e.g. Elixir call nodes)
+    kind_refinement_fn: Callable[[Node, str, str], str] | None = None
+
+    # Optional: extract parent name from an ancestor node (for languages where
+    # child_by_field_name("name") doesn't work on parent class nodes)
+    parent_name_fn: Callable[[Node, str], str | None] | None = None
+
 
 def _py_visibility(name: str, _mods: list[str]) -> str:
     if name.startswith("__") and name.endswith("__"):
@@ -190,6 +199,62 @@ def _java_visibility(_name: str, mods: list[str]) -> str:
 
 def _public_by_default(_name: str, _mods: list[str]) -> str:
     return "public"
+
+
+def _elixir_visibility(_name: str, mods: list[str]) -> str:
+    """Elixir: defp/defmacrop/defguardp → private, everything else → public."""
+    for mod in mods:
+        if mod in ("defp", "defmacrop", "defguardp"):
+            return "private"
+    return "public"
+
+
+_ELIXIR_KIND_MAP: dict[str, str] = {
+    "defmodule": "module",
+    "defprotocol": "interface",
+    "defimpl": "impl",
+    "def": "function",
+    "defp": "function",
+    "defmacro": "macro",
+    "defmacrop": "macro",
+    "defstruct": "struct",
+    "defguard": "function",
+    "defguardp": "function",
+    "defdelegate": "function",
+}
+
+
+def _elixir_kind(node: Node, src: str, default: str) -> str:
+    """Refine kind for Elixir — all constructs are call nodes."""
+    if node.type != "call":
+        return default
+    for child in node.children:
+        if child.type == "identifier":
+            keyword = _node_text(child, src)
+            return _ELIXIR_KIND_MAP.get(keyword, default)
+    return default
+
+
+def _elixir_parent_name(node: Node, src: str) -> str | None:
+    """Extract module name from a defmodule/defprotocol/defimpl call node.
+
+    Returns None for non-module call nodes so the parent walk continues.
+    """
+    if node.type != "call":
+        return None
+    keyword = None
+    for child in node.children:
+        if child.type == "identifier":
+            keyword = _node_text(child, src)
+            break
+    if keyword not in ("defmodule", "defprotocol", "defimpl"):
+        return None
+    for child in node.children:
+        if child.type == "arguments":
+            for arg in child.children:
+                if arg.type == "alias":
+                    return _node_text(arg, src)
+    return None
 
 
 LANGUAGE_CONFIGS: dict[str, LanguageConfig] = {
@@ -316,6 +381,19 @@ LANGUAGE_CONFIGS: dict[str, LanguageConfig] = {
         parent_extraction="none",
         parent_class_types=frozenset(),
         entry_point_patterns=["main.c"],
+    ),
+    "elixir": LanguageConfig(
+        symbol_node_types={
+            "call": "function",  # refined by kind_refinement_fn
+        },
+        import_node_types=["call"],
+        export_node_types=[],
+        visibility_fn=_elixir_visibility,
+        parent_extraction="nesting",
+        parent_class_types=frozenset({"call"}),
+        entry_point_patterns=["mix.exs", "application.ex", "router.ex", "endpoint.ex"],
+        kind_refinement_fn=_elixir_kind,
+        parent_name_fn=_elixir_parent_name,
     ),
 }
 
@@ -474,6 +552,10 @@ class ASTParser:
             if kind is None:
                 continue
 
+            # Allow per-language refinement of kind (e.g. Elixir call nodes)
+            if config.kind_refinement_fn is not None:
+                kind = config.kind_refinement_fn(def_node, src, kind)
+
             # Refine "struct" kind for Go type_spec (check if struct or interface body)
             if kind == "struct" and config.parent_extraction == "receiver":
                 kind = _refine_go_type_kind(def_node, src)
@@ -548,10 +630,17 @@ class ASTParser:
             return None
 
         if config.parent_extraction in ("nesting", "impl"):
-            # Walk up the AST to find a class/impl ancestor
             ancestor = def_node.parent
             while ancestor is not None:
                 if ancestor.type in config.parent_class_types:
+                    # Try language-specific parent name extraction first
+                    if config.parent_name_fn is not None:
+                        pname = config.parent_name_fn(ancestor, src)
+                        if pname:
+                            return pname
+                        # parent_name_fn returned None — skip this ancestor
+                        ancestor = ancestor.parent
+                        continue
                     name_node = ancestor.child_by_field_name("name") or (
                         ancestor.child_by_field_name("type")  # Rust impl_item
                     )
