@@ -111,3 +111,6 @@ ehthumbs.db
 
 # Claude Code
 .claude/
+
+# Chunkhound search index
+.chunkhound/
