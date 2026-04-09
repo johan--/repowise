@@ -781,11 +781,14 @@ class DecisionExtractor:
 
     def _iter_source_files(self):
         """Yield source files under repo_path, skipping irrelevant dirs."""
-        for child in self._repo_path.rglob("*"):
-            if any(part in _SKIP_DIRS for part in child.parts):
-                continue
-            if child.is_file() and child.suffix.lower() not in _BINARY_EXTENSIONS:
-                yield child
+        import os
+
+        for dirpath, dirnames, filenames in os.walk(self._repo_path):
+            # Prune skipped dirs in-place so os.walk never enters them
+            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+            for fname in filenames:
+                if Path(fname).suffix.lower() not in _BINARY_EXTENSIONS:
+                    yield Path(dirpath) / fname
 
     def _get_neighbors(self, file_path: str) -> list[str]:
         """Get 1-hop graph neighbors for a file."""
